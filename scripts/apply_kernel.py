@@ -1,18 +1,20 @@
 import argparse
 import cv2
 import numpy as np
+from numpy.fft import fft2, ifft2
 
 
-def motion_kernel(angle, d, sz=65):
-    d = int(d)
-    sz = int(sz)
-    kern = np.ones((1, d), np.float32)
-    c, s = np.cos(angle), np.sin(angle)
-    A = np.float32([[c, -s, 0], [s, c, 0]])
-    sz2 = sz // 2
-    A[:, 2] = (sz2, sz2) - np.dot(A[:, :2], ((d - 1) * 0.5, 0))
-    kern = cv2.warpAffine(kern, A, (sz, sz), flags=cv2.INTER_CUBIC)
-    return kern
+
+def wiener_filter(img, kernel, K):
+  kernel /= np.sum(kernel)
+  dummy = np.copy(img)
+  dummy = fft2(dummy)
+  kernel = fft2(kernel, s = img.shape)
+  kernel = np.conj(kernel) / (np.abs(kernel) ** 2 + K)
+  dummy = dummy * kernel
+  dummy = np.abs(ifft2(dummy))
+  return dummy
+
 
 
 def apply_kernel(img, kernel, noise=10):
@@ -27,7 +29,7 @@ def apply_kernel(img, kernel, noise=10):
     PSF2 = (PSF ** 2).sum(-1)
     iPSF = PSF / (PSF2 + noise)[..., np.newaxis]
     RES = cv2.mulSpectrums(img, iPSF, 0)
-    
+
     res = cv2.idft(RES, flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
 
     res = np.roll(res, -kh // 2, 0)
@@ -40,24 +42,19 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--image_path', required=True)
 parser.add_argument('--output_path', default='result.png')
 parser.add_argument('--kernel_path')
-parser.add_argument('--angle')
-parser.add_argument('--distance')
-parser.add_argument('--sz', default=65)
-parser.add_argument('--snr', default=10)
 if __name__ == '__main__':
     args = parser.parse_args()
 
     img = cv2.imread(args.image_path, 0)
     img = np.float32(img) / 255.0
-
     img = cv2.dft(img, flags=cv2.DFT_COMPLEX_OUTPUT)
 
-    if args.kernel_path:
-        kernel = cv2.imread(args.kernel_path, 0)
-        kernel = np.float32(kernel)
-    else:
-        angle_in_radians = np.deg2rad(float(args.angle))
-        kernel = motion_kernel(angle_in_radians, args.distance, args.sz)
+    image = cv2.cvtColor(cv2.imread(args.image_path), cv2.COLOR_BGR2GRAY)
+    kernel = cv2.imread("kernel.png", cv2.IMREAD_GRAYSCALE)
+    kernel = kernel.astype(np.float32)
 
-    res = apply_kernel(img, kernel, noise=int(args.snr))
-    cv2.imwrite(args.output_path, res * 255)
+    deconvolved_image = wiener_filter(image, kernel, 0.01)
+    cv2.imwrite("res1.png", deconvolved_image)
+
+    res = apply_kernel(img, kernel, noise=10)
+    cv2.imwrite("res2.png", res * 255)
